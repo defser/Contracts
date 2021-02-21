@@ -44,3 +44,19 @@ Any user can get a new vault from a vault factory. Steps
 ## Vault
 ### Borrow Pillar Tokens
 The owner of the vault can borrow the Pillar Tokens from the vault using transition [MintPillar](https://github.com/PillarProtocol/Contracts/blob/9468b89120be5ac26024becc616692f389c10363/Vault.scilla#L609). The tokens minted are subjected to liquidation ratio and total debt.
+
+### Repay Pillar Token
+Vault Owner can repay pillar tokens in either of two ways
+1. Call [BurnPillar](https://github.com/PillarProtocol/Contracts/blob/9468b89120be5ac26024becc616692f389c10363/Vault.scilla#L699) transition (or)
+2. Call [repayTotalDebt](https://github.com/PillarProtocol/Contracts/blob/9468b89120be5ac26024becc616692f389c10363/Vault.scilla#L671) transition
+
+In either case, before calling this transition, there must be sufficient Pillar Tokens that should have been Transfered to this vault address.
+
+### Liquidation
+If the vault's collateralization ratio is below certain level, users can liquidate. Vault liquidation is a two step process.
+1. Place a [liquidation request](https://github.com/PillarProtocol/Contracts/blob/9468b89120be5ac26024becc616692f389c10363/Vault.scilla#L342).
+2. [Liquidate the vault](https://github.com/PillarProtocol/Contracts/blob/9468b89120be5ac26024becc616692f389c10363/Vault.scilla#L397). Only user who has placed the liquidation in last 5 blocks can liquidate. 
+
+## Price Oracle
+Every Vault has a price oracle address stored. Price oracles update the price of collateral in the vault. 
+The current model of price oracle is simple. A incentivized and decentralized model shall be updated latter. The price oracle is designed in such a way that it throws exception if the vault use any price that is more than 5 blocks old. 
