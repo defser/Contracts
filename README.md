@@ -19,4 +19,4 @@ Transition for minting Pillar Tokens: **MintPillar**
 Transition for burning Pillar Tokens: **BurnPillar** or **RepayTotalDebt**
 
 ## Price Oracle Contract
-Price Oracle is mainly used to provide prices of collateral  
+Price Oracle is mainly used to provide prices of collateral to **Pillar Vault Contract**
