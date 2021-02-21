@@ -1,0 +1,859 @@
+scilla_version 0
+
+import IntUtils BoolUtils
+
+library VaultAssets
+  let uint128_zero = Uint128 0
+  let hundred = Uint128 100
+  let ten_thousand = Uint128 10000
+  let million = Uint128 1000000
+  let trillion = Uint128 1000000000000
+
+  let uint128_one = Uint128 1
+  
+    let one_msg = 
+      fun (msg : Message) => 
+      let nil_msg = Nil {Message} in
+      Cons {Message} msg nil_msg
+    
+    let two_msgs =
+      fun (msg1 : Message) =>
+      fun (msg2 : Message) =>
+        let msgs_tmp = one_msg msg2 in
+        Cons {Message} msg1 msgs_tmp
+    
+    let three_msgs = 
+      fun (msg1 : Message) =>
+      fun (msg2 : Message) =>
+      fun (msg3 : Message) =>
+        let msgs_temp = two_msgs msg2 msg3 in
+        Cons {Message} msg1 msgs_temp
+  
+  type Error =
+    | LessThanMinimumCollateral
+    | CodeNotVaultFactory
+    | AlreadyInitialized
+    | CollateralShouldMatch
+    | OnlyGovernance
+    | LessThanCollateralizationRatio
+    | NoBorrowedPillar
+    | CodeNotOwner
+    | CannotDecodeBNum
+    | TokenShouldMatch
+    | InSufficientCollateral
+    | NotPriceOracle
+    | BlockGapToLessForLiquidation
+    | RequestIsAlreadyPlaced
+    | AddressIsNotPlacer
+    | RequestTooOld
+  
+  let make_error =
+    fun (result : Error) =>
+      let result_code = 
+        match result with
+          | LessThanMinimumCollateral => Int32 -401
+          | CodeNotVaultFactory       => Int32 -402
+          | AlreadyInitialized        => Int32 -403
+          | CollateralShouldMatch     => Int32 -404
+          | OnlyGovernance            => Int32 -405
+          | LessThanCollateralizationRatio => Int32 -406
+          | NoBorrowedPillar => Int32 -407
+          | CodeNotOwner              => Int32 -408
+          | CannotDecodeBNum           => Int32 -409
+          | TokenShouldMatch             => Int32 -410
+          | InSufficientCollateral     => Int32 -411
+          | NotPriceOracle             => Int32 -412
+          | BlockGapToLessForLiquidation => Int32 -413
+          | RequestIsAlreadyPlaced      => Int32 -414
+          | AddressIsNotPlacer          => Int32 -415
+          | RequestTooOld               => Int32 -416
+        end
+      in
+      { _exception : "Error"; code : result_code }
+  
+  let decode_value = 
+    fun (some_value: Option Uint128) =>
+      match some_value with 
+        | Some value => value
+        | None => uint128_zero
+      end
+  
+  let true = True
+  let false = False
+  
+  let get_bool = 
+    fun (some_bool: Option Bool) =>
+      match some_bool with
+        | Some bool => bool
+        | None => false
+      end
+
+contract Vault
+
+(
+  factory: ByStr20,
+  collateralAddress: ByStr20,
+  minCollateralAmount: Uint128,
+  governanceContractAddress: ByStr20,
+  initPriceOracle: ByStr20,
+  devAddress: ByStr20,
+  burnAddress: ByStr20,
+  insuranceAddress: ByStr20,
+  vaultVersion: Uint32
+)
+
+field owner: ByStr20 = 0x0000000000000000000000000000000000000000
+field token_address: ByStr20 = 0x0000000000000000000000000000000000000000
+field vaultFactory: ByStr20 = factory
+field vault_version: Uint32 = vaultVersion
+field collateral_address: ByStr20 = collateralAddress
+
+field initialized: Bool = False
+
+field governance: ByStr20 = governanceContractAddress
+field governanceProposalsExecuted: Map ByStr20 (Map ByStr20 Bool) 
+  = Emp ByStr20 (Map ByStr20 Bool)
+
+(*will change latter, only for testing*)
+field blocksPerYear: Uint128 = Uint128 1000
+
+(*liquidation related param*)
+field liquidationBasisPoints: Uint128 = Uint128 1000
+
+field devShareBasisPoints: Uint128 = Uint128 3000
+field burnShareBasisPoints: Uint128 = Uint128 7000
+field lastLiquidatedAt: BNum = BNum 0
+field liquidationBlocksGap: Uint128 = Uint128 5
+field liquidationRequestPlacer: ByStr20 = 0x0000000000000000000000000000000000000000
+field liquidationRequestPlacedAt: BNum = BNum 0
+
+(*params changable by governance*)
+field minimum_collateral_amount: Uint128 = minCollateralAmount
+field interestPer10000PillarToken: Uint128 = Uint128 700
+field priceOracleAddress: ByStr20 = initPriceOracle
+field minimumCollateralizationRatio: Uint128 = Uint128 250
+field devTeamAddress: ByStr20 = devAddress
+field insuranceWalletAddress: ByStr20 = insuranceAddress
+
+(*active params*)
+field collateralAmount: Uint128 = uint128_zero
+field borrowedPillar: Uint128 = uint128_zero
+field interestAccumulated: Uint128 = uint128_zero
+field lastUpdatedBlock: BNum = BNum 0
+field priceOfQuintilllionCollateralInCents: Uint128 = Uint128 54321000000
+
+procedure ThrowError(err : Error)
+  e = make_error err;
+  throw e
+end
+
+procedure isInitialized()
+  status <- initialized;
+  match status with
+    | False =>
+    | True =>
+      err = AlreadyInitialized;
+      ThrowError err
+  end
+end
+
+procedure isNotZero(some_value: Option Uint128)
+  match some_value with
+    | Some value =>
+    | None =>
+      err = CannotDecodeBNum;
+      ThrowError err
+  end
+end
+
+procedure isGovernance(address: ByStr20)
+  gov <- governance;
+  is_gov = builtin eq address gov;
+  match is_gov with
+    | True =>
+    | False => 
+      err = OnlyGovernance;
+      ThrowError err
+  end
+end
+
+procedure isFactory(address: ByStr20)
+  vault_factory <- vaultFactory;
+  is_factory = builtin eq vault_factory address;
+  match is_factory with
+    | True =>
+    | False =>
+      err = CodeNotVaultFactory;
+      ThrowError err
+  end
+end
+
+procedure IsOwner(address: ByStr20)
+  vaultOwner <- owner;
+  is_owner = builtin eq vaultOwner address;
+  match is_owner with
+  | True =>
+  | False =>
+    err = CodeNotOwner;
+    ThrowError err
+  end
+end
+
+procedure IsNotOwner(address: ByStr20)
+  vaultOwner <- owner;
+  is_owner = builtin eq vaultOwner address;
+  match is_owner with
+  | False =>
+  | True =>
+    err = CodeNotOwner;
+    ThrowError err
+  end
+end
+
+procedure IsDevTeam(address: ByStr20)
+  vaultOwner <- devTeamAddress;
+  is_owner = builtin eq vaultOwner address;
+  match is_owner with
+  | True =>
+  | False =>
+    err = CodeNotOwner;
+    ThrowError err
+  end
+end
+
+procedure IsPriceOracle(address: ByStr20)
+  priceOracle <- priceOracleAddress;
+  is_oracle = builtin eq priceOracle address;
+  match is_oracle with
+  | True =>
+  | False =>
+    err = NotPriceOracle;
+    ThrowError err
+  end
+end
+
+procedure checkMinCollateral(amount: Uint128)
+  lessThan = builtin lt amount minCollateralAmount;
+  match lessThan with
+    | False =>
+    | True => 
+      err = LessThanMinimumCollateral;
+      ThrowError err
+    end
+end
+
+procedure checkCollateralizationRatio(amount: Uint128)
+  pillar <- borrowedPillar;
+  ia <- interestAccumulated;
+  pillar = builtin add pillar amount;
+  pillar = builtin add pillar ia;
+  col <- collateralAmount;
+  price <- priceOfQuintilllionCollateralInCents;
+  min_ratio <- minimumCollateralizationRatio;
+  
+  temp = builtin mul col price;
+  temp = builtin div temp ten_thousand;
+  temp = builtin div temp trillion;
+  current_col_ratio = builtin div temp pillar;
+  
+  is_less = builtin lt min_ratio current_col_ratio;
+  match is_less with
+    | True =>
+    | False =>
+      err = LessThanCollateralizationRatio;
+      ThrowError err
+  end
+end
+
+procedure isCollateralizationBelowLiquidation()
+  pillar <- borrowedPillar;
+  ia <- interestAccumulated;
+  pillar = builtin add pillar ia;
+  col <- collateralAmount;
+  price <- priceOfQuintilllionCollateralInCents;
+  min_ratio <- minimumCollateralizationRatio;
+  
+  temp = builtin mul col price;
+  temp = builtin div temp ten_thousand;
+  temp = builtin div temp trillion;
+  current_col_ratio = builtin div temp pillar;
+  
+  is_less = builtin lt current_col_ratio min_ratio;
+  match is_less with
+    | True =>
+    | False =>
+      err = LessThanCollateralizationRatio;
+      ThrowError err
+  end
+end
+
+procedure checkBurn()
+  bp <- borrowedPillar;
+  isAmountLessThanBp = builtin eq bp uint128_zero;
+  match isAmountLessThanBp with
+    | False => 
+    | True => 
+      err = NoBorrowedPillar;
+      ThrowError err
+    end
+end
+
+procedure refreshAccumulatedInterest()
+  currentBlock <- & BLOCKNUMBER;
+  lub <- lastUpdatedBlock;
+  blockDiff = builtin bsub currentBlock lub;
+  some_diff = builtin to_uint128 blockDiff;
+  diff = decode_value some_diff;
+  isNotZero some_diff;
+  
+  bpy <- blocksPerYear;
+  a <- interestAccumulated;
+  
+  bp <- borrowedPillar;
+  
+  i <- interestPer10000PillarToken;
+  
+  temp1 = builtin mul bp diff;
+  temp2 = builtin mul temp1 i;
+  temp3 = builtin div temp2 ten_thousand;
+  temp4 = builtin div temp3 bpy;
+  a_new = builtin add a temp4;
+  interestAccumulated := a_new;
+  lastUpdatedBlock := currentBlock
+end
+
+procedure callPriceOracle(collateral: ByStr20)
+  oracle <- priceOracleAddress;
+  msg = {_tag: "GetPrice"; _recipient: oracle; _amount: uint128_zero; collateral: collateral};
+  msgs = one_msg msg;
+  send msgs
+end
+
+transition refreshVault()
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress
+end
+
+transition priceOracleCallback(price: Uint128)
+  IsPriceOracle _sender;
+  priceOfQuintilllionCollateralInCents := price
+end
+
+transition placeLiquidationRequest()
+  IsNotOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  currentBlock <- & BLOCKNUMBER;
+  requestPlacedAt <- liquidationRequestPlacedAt;
+  
+  blockDiff = builtin bsub currentBlock requestPlacedAt;
+  some_diff = builtin to_uint128 blockDiff;
+  diff = decode_value some_diff;
+  isNotZero some_diff;
+  
+  gap <- liquidationBlocksGap;
+  request_possible = builtin lt gap diff;
+  match request_possible with 
+    | True =>
+        liquidationRequestPlacedAt := currentBlock;
+        liquidationRequestPlacer := _sender
+    | False =>
+      err = RequestIsAlreadyPlaced;
+      ThrowError err
+    end
+end
+
+procedure checkLiquidationRequester(address: ByStr20)
+  placer <- liquidationRequestPlacer;
+  is_placer = builtin eq placer address;
+  match is_placer with
+    | True =>
+    | False =>
+      err = AddressIsNotPlacer;
+      ThrowError err
+  end
+end
+
+procedure checkRequestGap()
+  currentBlock <- & BLOCKNUMBER;
+  requestPlacedAt <- liquidationRequestPlacedAt;
+  
+  blockDiff = builtin bsub currentBlock requestPlacedAt;
+  some_diff = builtin to_uint128 blockDiff;
+  diff = decode_value some_diff;
+  isNotZero some_diff;
+  
+  gap <- liquidationBlocksGap;
+  request_possible = builtin lt diff gap;
+  
+  match request_possible with
+    | True =>
+    | False =>
+      err = RequestTooOld;
+      ThrowError err
+  end
+end
+
+transition liquidateVault()
+  IsNotOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  checkRequestGap;
+  checkLiquidationRequester _sender;
+  currentBlock <- & BLOCKNUMBER;
+  lastLiquidatedBlock <- lastLiquidatedAt;
+  blockDiff = builtin bsub currentBlock lastLiquidatedBlock;
+  some_diff = builtin to_uint128 blockDiff;
+  diff = decode_value some_diff;
+  isNotZero some_diff;
+  
+  pillar <- borrowedPillar;
+  ia <- interestAccumulated;
+  total_debt = builtin add pillar ia;
+  
+  gap <- liquidationBlocksGap;
+  tokenContract <- token_address;
+  liquidation_possible = builtin lt gap diff;
+  
+  factoryAddress <- vaultFactory;
+  insuranceFundAddress <- insuranceWalletAddress;
+  
+  match liquidation_possible with
+    | False =>
+      err = BlockGapToLessForLiquidation;
+      ThrowError err
+    | True =>
+      msg = {_tag: "BurnFrom"; _recipient: tokenContract; _amount: uint128_zero; from: _sender; amount: pillar};
+      msg_for_intrests = {_tag: "TransferFrom"; _recipient: tokenContract; _amount: uint128_zero; from: _sender; to: insuranceFundAddress; amount: ia};
+      (*  burner and burn_account are random values at the moment*)
+(*      msg_to_factory_contract = {_tag: "BurnSuccessCallBackFromVault"; _recipient : factoryAddress; _amount : uint128_zero; burner : tokenContract; burn_account : tokenContract; amount: pillar};*)
+(*      msgs = three_msgs msg msg_for_intrests msg_to_factory_contract;*)
+      msgs = two_msgs msg msg_for_intrests;
+      send msgs;
+      owner := _sender;
+      borrowedPillar := uint128_zero;
+      interestAccumulated := uint128_zero;
+      
+      temp = BNum 0;
+      liquidationRequestPlacedAt := temp;
+      temp2 = 0x0000000000000000000000000000000000000000;
+      liquidationRequestPlacer := temp2;
+      
+      col_amount <- collateralAmount;
+      lbp <- liquidationBasisPoints;
+      
+      temp = builtin mul col_amount lbp;
+      penalty = builtin div temp ten_thousand;
+      
+      dsbp <- devShareBasisPoints;
+      temp = builtin mul dsbp penalty;
+      dev_share = builtin div temp ten_thousand;
+      
+      bsbp <- burnShareBasisPoints;
+      temp = builtin mul bsbp penalty;
+      burn_share = builtin div temp ten_thousand;
+      
+      col <- collateral_address;
+      
+      reward_to_dev = {_tag: "Transfer"; _recipient : col; _amount : uint128_zero; to: devAddress; amount: dev_share};
+      msgs2 = one_msg reward_to_dev;
+      send msgs2;
+      
+(*      the amount below should be used to guy gzil from dex and burn*)
+(*      currently simply sent to dev*)
+      burn_share_msg = {_tag: "Transfer"; _recipient : col; _amount : uint128_zero; to: burnAddress; amount: burn_share};
+      msgs3 = one_msg burn_share_msg;
+      send msgs3
+  end
+  
+end
+
+
+transition changeDevTeamAddress(newAddress: ByStr20)
+  IsDevTeam _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  devTeamAddress := newAddress
+end
+
+(*governance changeable params*)
+transition changeGovernance(governanceProposalId: ByStr20, newGovernance: ByStr20)
+  isGovernance _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  some_is_executed <- governanceProposalsExecuted[_sender][governanceProposalId];
+  is_executed = get_bool some_is_executed;
+  match is_executed with
+    | True =>
+    | False =>
+      governance := newGovernance;
+      governanceProposalsExecuted[_sender][governanceProposalId] := true;
+      e = {_eventname: "ChangeGovnernance"; governance: newGovernance};
+      event e
+  end
+end
+
+transition changeMinCollateral(governanceProposalId: ByStr20, amount: Uint128)
+  isGovernance _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  some_is_executed <- governanceProposalsExecuted[_sender][governanceProposalId];
+  is_executed = get_bool some_is_executed;
+  match is_executed with
+    | True =>
+    | False =>
+      minimum_collateral_amount := amount;
+      governanceProposalsExecuted[_sender][governanceProposalId] := true;
+      e = {_eventname: "ChangeMinimumCollateral"; amount: amount};
+      event e
+  end
+end
+
+transition changeCollateralRatio(governanceProposalId: ByStr20, ratio: Uint128)
+  isGovernance _sender;
+  isInitialized;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  some_is_executed <- governanceProposalsExecuted[_sender][governanceProposalId];
+  is_executed = get_bool some_is_executed;
+  match is_executed with
+    | True =>
+    | False =>
+      minimumCollateralizationRatio := ratio;
+      governanceProposalsExecuted[_sender][governanceProposalId] := true;
+      e = {_eventname: "ChangeCollateralRatio"; ratio: ratio};
+      event e
+  end    
+end
+
+transition changeInterestRate(governanceProposalId: ByStr20, newInterestRate: Uint128)
+  isGovernance _sender;
+  isInitialized;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  some_is_executed <- governanceProposalsExecuted[_sender][governanceProposalId];
+  is_executed = get_bool some_is_executed;
+  match is_executed with
+    | True =>
+    | False =>
+      interestPer10000PillarToken := newInterestRate;
+      governanceProposalsExecuted[_sender][governanceProposalId] := true;
+      e = {_eventname: "ChangeInterestRate"; interestRate: newInterestRate};
+      event e
+  end
+end
+
+transition changePriceOracle(governanceProposalId: ByStr20, newOracleAddress: ByStr20)
+  isGovernance _sender;
+  isInitialized;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  some_is_executed <- governanceProposalsExecuted[_sender][governanceProposalId];
+  is_executed = get_bool some_is_executed;
+  match is_executed with
+    | True =>
+    | False =>
+      priceOracleAddress := newOracleAddress;
+      governanceProposalsExecuted[_sender][governanceProposalId] := true;
+      e = {_eventname: "ChangePriceOracle"; newOracleAddress: newOracleAddress};
+      event e
+  end
+end
+
+(*governance changeable params*)
+
+(*transition to check governance upates*)
+transition checkGovernance()
+  gov <- governance;
+  msg_to_governance = {_tag: "CheckGovernanceUpdates"; _recipient: gov; _amount: uint128_zero};
+  msgs = one_msg msg_to_governance;
+  send msgs
+end
+
+transition activate(tokenAddress: ByStr20, userAddress: ByStr20, amount: Uint128)
+  isFactory _sender;
+  isInitialized;
+  checkMinCollateral amount;
+  x <- & BLOCKNUMBER;
+  lastUpdatedBlock := x;
+  lastLiquidatedAt := x;
+  initialized := true;
+  owner := userAddress;
+  token_address := tokenAddress;
+  collateral_contract <- collateral_address;
+  e = {_eventname: "ActivatedVault"; owner: userAddress; collateralAmount: amount};
+  event e;
+  msg_to_factory_contract = {_tag : "collateralAddressCallback"; _recipient : _sender; _amount : uint128_zero; collateral_contract : collateral_contract; spender : userAddress; amountDeducted: amount; vaultAddress: _this_address};
+  msgs = one_msg msg_to_factory_contract;
+  send msgs
+end
+
+transition addCollateral(amount: Uint128)
+  IsOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  collateral_contract <- collateral_address;
+  e = {_eventname: "AddCollateral"; owner: _sender; amount: amount};
+  event e;
+  msg_to_collateral = {_tag: "TransferFrom"; _recipient: collateral_contract; _amount: uint128_zero; from: _sender; to: _this_address; amount: amount};
+  msgs = one_msg msg_to_collateral;
+  send msgs
+end
+
+transition getVaultCollateral()
+  msg_to_vault = {_tag: "getVaultCollateralCallback"; _recipient: _sender; _amount: uint128_zero; collateralAddress: collateralAddress};
+  msgs = one_msg msg_to_vault;
+  send msgs
+end
+
+transition MintPillar(addressToSend: ByStr20, amount: Uint128)
+  IsOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  checkCollateralizationRatio amount;
+  factoryAddress <- vaultFactory;
+  current_pillar_amount <- borrowedPillar;
+  new_pillar_amount = builtin add current_pillar_amount amount;
+  borrowedPillar := new_pillar_amount;
+  e = {_eventname: "MintPillar"; owner: _sender; amount: amount};
+  event e;
+  msg_to_factory_contract = {_tag : "VaultMint"; _recipient : factoryAddress; _amount : uint128_zero; addressToSend: addressToSend ;amount : amount};
+  msgs = one_msg msg_to_factory_contract;
+  send msgs
+end
+
+transition transferPillar(address: ByStr20, amount: Uint128)
+  IsOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  tokenAddress <- token_address;
+  msg_to_token = {_tag: "Transfer"; _recipient : tokenAddress; _amount : uint128_zero; to: address; amount: amount};
+  msgs = one_msg msg_to_token;
+  send msgs
+end
+
+transition releaseCollateral(address: ByStr20, amount: Uint128)
+  IsOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  current_pillar_amount <- borrowedPillar;
+  ia <- interestAccumulated;
+  total_pillar_amount = builtin add current_pillar_amount ia;
+  col_amount <- collateralAmount;
+  new_col_amount = builtin sub col_amount amount;
+  
+  price <- priceOfQuintilllionCollateralInCents;
+  min_ratio <- minimumCollateralizationRatio;
+  
+  temp = builtin mul new_col_amount price;
+  temp = builtin div temp ten_thousand;
+  temp = builtin div temp trillion;
+  current_col_ration = builtin div temp total_pillar_amount;
+  
+  can_release = builtin lt min_ratio current_col_ration;
+  
+  match can_release with
+    | True =>
+      col <- collateral_address;
+      e = {_eventname: "ReleaseCollateral"; owner: _sender; amountReleasedTo: address; amount: amount};
+      event e;
+      msg_to_collateral = {_tag: "Transfer"; _recipient : col; _amount : uint128_zero; to: address; amount: amount};
+      msgs = one_msg msg_to_collateral;
+      send msgs
+    | False =>
+      err = InSufficientCollateral;
+      ThrowError err
+  end
+      
+end
+
+(*@repayAll*)
+transition repayTotalDebt()
+  IsOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  checkBurn;
+  factoryAddress <- vaultFactory;
+  tokenAddress <- token_address;
+  current_pillar_amount <- borrowedPillar;
+  ia <- interestAccumulated;
+  total_amount = builtin add current_pillar_amount ia;
+  
+  borrowedPillar := uint128_zero;
+  interestAccumulated := uint128_zero;
+  insuranceFundAddress <- insuranceWalletAddress;
+
+  e = {_eventname: "RepayTotalDebt"; amount: total_amount};
+  event e;
+  msg_to_token_contract = {_tag : "Burn"; _recipient : tokenAddress; _amount : uint128_zero; amount : current_pillar_amount};
+  msg_for_intrests = {_tag: "Transfer"; _recipient: tokenAddress; _amount: uint128_zero; to: insuranceFundAddress; amount: ia};
+  
+  (*  burner and burn_account are random values at the moment*)
+(*  msg_to_factory_contract = {_tag: "BurnSuccessCallBackFromVault"; _recipient : factoryAddress; _amount : uint128_zero; burner : tokenAddress; burn_account : tokenAddress; amount: current_pillar_amount};*)
+(*  msgs = three_msgs msg_to_token_contract msg_for_intrests msg_to_factory_contract;*)
+  msgs = two_msgs msg_to_token_contract msg_for_intrests;
+  send msgs
+end
+
+(*@repay*)
+transition BurnPillar(amount: Uint128)
+  IsOwner _sender;
+  refreshAccumulatedInterest;
+  callPriceOracle collateralAddress;
+  checkBurn;
+  factoryAddress <- vaultFactory;
+  tokenAddress <- token_address;
+  current_pillar_amount <- borrowedPillar;
+  ia <- interestAccumulated;
+  total_amount = builtin add current_pillar_amount ia;
+  is_paying_full_amount = builtin lt total_amount amount;
+  
+  insuranceFundAddress <- insuranceWalletAddress;
+  
+  match is_paying_full_amount with
+    | True =>
+        borrowedPillar := uint128_zero;
+        interestAccumulated := uint128_zero;
+        msg_to_token_contract = {_tag : "Burn"; _recipient : tokenAddress; _amount : uint128_zero; amount : current_pillar_amount};
+        msg_for_intrests = {_tag: "Transfer"; _recipient: tokenAddress; _amount: uint128_zero; to: insuranceFundAddress; amount: ia};
+        (*  burner and burn_account are random values at the moment*)
+(*        msg_to_factory_contract = {_tag: "BurnSuccessCallBackFromVault"; _recipient : factoryAddress; _amount : uint128_zero; burner : tokenAddress; burn_account : tokenAddress; amount: total_amount};*)
+(*        msgs = three_msgs msg_to_token_contract msg_for_intrests msg_to_factory_contract;*)
+        msgs = two_msgs msg_to_token_contract msg_for_intrests;
+        send msgs
+    | False =>
+        is_amount_more_than_interest = builtin lt ia amount;
+        match is_amount_more_than_interest with
+          | True => 
+              remaining = builtin sub amount ia;
+              bp_remaining = builtin sub current_pillar_amount remaining;
+              borrowedPillar := bp_remaining;
+              interestAccumulated := uint128_zero;
+              e = {_eventname: "RepayDebt"; amount: amount};
+              event e;
+              msg_for_intrests = {_tag: "Transfer"; _recipient: tokenAddress; _amount: uint128_zero; to: insuranceFundAddress; amount: ia};
+              msg_to_token_contract = {_tag : "Burn"; _recipient : tokenAddress; _amount : uint128_zero; amount : remaining};
+              (*  burner and burn_account are random values at the moment*)
+(*              msg_to_factory_contract = {_tag: "BurnSuccessCallBackFromVault"; _recipient : factoryAddress; _amount : uint128_zero; burner : tokenAddress; burn_account : tokenAddress; amount: remaining};*)
+(*              msgs = three_msgs msg_to_token_contract msg_for_intrests msg_to_factory_contract;*)
+              msgs = two_msgs msg_to_token_contract msg_for_intrests;
+              send msgs
+          | False =>
+              remaining = builtin sub ia amount;
+              interestAccumulated := remaining;
+              e = {_eventname: "RepayDebt"; amount: amount};
+              event e;
+              msg_for_intrests = {_tag: "Transfer"; _recipient: tokenAddress; _amount: uint128_zero; to: insuranceFundAddress; amount: amount};
+              msgs = one_msg msg_for_intrests;
+              send msgs
+        end
+  end
+end
+
+procedure removeBalances(address: ByStr20, amount: Uint128)
+  col <- collateral_address;
+  is_col = builtin eq col address;
+  
+  pil <- token_address;
+  is_pil = builtin eq pil address;
+  
+  is_pil_or_col = orb is_pil is_col;
+  
+  match is_pil_or_col with
+    | True =>
+        match is_col with
+          | True => 
+            col_amount <- collateralAmount;
+            col_amount = builtin sub col_amount amount;
+            collateralAmount := col_amount
+          | False =>
+        end
+    | False =>
+      err = CollateralShouldMatch;
+      ThrowError err
+  end
+end
+
+procedure addBalances(address: ByStr20, amount: Uint128)
+  col <- collateral_address;
+  is_col = builtin eq col address;
+  
+  pil <- token_address;
+  is_pil = builtin eq pil address;
+  
+  is_pil_or_col = orb is_pil is_col;
+  
+  match is_pil_or_col with
+    | True =>
+        match is_col with
+          | True => 
+            col_amount <- collateralAmount;
+            col_amount = builtin add col_amount amount;
+            collateralAmount := col_amount
+          | False =>
+        end
+    | False =>
+      err = CollateralShouldMatch;
+      ThrowError err
+  end
+end
+
+procedure isTokenContract(address: ByStr20)
+  token <- token_address;
+  is_token = builtin eq token address;
+  
+  col <- collateral_address;
+  is_col = builtin eq col address;
+
+  is_pil_or_col = orb is_token is_col;
+
+  match is_pil_or_col with
+    | True =>
+    | False =>
+      err = TokenShouldMatch;
+      ThrowError err
+  end
+end
+
+transition RecipientAcceptTransferFrom(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+(*  to be complete*)
+  isTokenContract _sender;
+  refreshAccumulatedInterest;
+  addBalances _sender amount
+end
+
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+(*  to be complete*)
+  isTokenContract _sender;
+  refreshAccumulatedInterest;
+  removeBalances _sender amount
+end
+
+transition RecipientAcceptTransfer(sender : ByStr20, recipient : ByStr20, amount : Uint128)
+  (*  to be complete*)
+  isTokenContract _sender;
+  refreshAccumulatedInterest;
+  addBalances _sender amount
+end
+
+transition TransferSuccessCallBack(sender : ByStr20, recipient : ByStr20, amount : Uint128)
+  (*  to be complete*)
+  isTokenContract _sender;
+  refreshAccumulatedInterest;
+  removeBalances _sender amount
+end
+
+transition BurnSuccessCallBack(burner : ByStr20, burn_account : ByStr20, amount : Uint128)
+  (*to be complete*)
+  refreshAccumulatedInterest;
+  isTokenContract _sender
+end
+
+
+
+
+
+
+
+
+
