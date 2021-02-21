@@ -1,0 +1,308 @@
+scilla_version 0
+
+import IntUtils
+library VaultFactoryAssets
+  let zero = Uint32 0
+  let one = Uint32 1
+  let two = Uint32 2
+  
+  let option_zero = Some {Uint32} zero
+  let option_one = Some {Uint32} one
+  let option_two = Some {Uint32} two
+  
+  
+  let uint128_zero = Uint128 0
+  let zero_address = 0x0000000000000000000000000000000000000000
+  let one_msg = 
+    fun (msg : Message) => 
+    let nil_msg = Nil {Message} in
+    Cons {Message} msg nil_msg
+  let two_msgs =
+    fun (msg1 : Message) =>
+    fun (msg2 : Message) =>
+      let msgs_tmp = one_msg msg2 in
+      Cons {Message} msg1 msgs_tmp
+
+  let decode_value = 
+    fun (some_value: Option Uint32) =>
+      match some_value with 
+        | Some value => value
+        | None => zero
+      end
+  
+  let decode_address = 
+    fun(some_address: Option ByStr20) =>
+      match some_address with
+        | Some address => address
+        | None => zero_address
+      end
+  
+  type Error =
+    | CodeIsSender
+    | CodeNotOwner
+    | VaultAlreadyCreated
+    | OnlyOccupiedVaultsCanMint
+    | ContractDeactivated
+    | VaultNotAvailable
+    | ShouldBeNonZeroAddress
+    | OnlyPillarContract
+    | NotAVault
+
+let make_error =
+  fun (result : Error) =>
+    let result_code = 
+      match result with
+      | CodeIsSender              => Int32 -501
+      | CodeNotOwner              => Int32 -502
+      | VaultAlreadyCreated       => Int32 -503
+      | OnlyOccupiedVaultsCanMint => Int32 -504
+      | ContractDeactivated       => Int32 -505
+      | VaultNotAvailable         => Int32 -506
+      | ShouldBeNonZeroAddress    => Int32 -507
+      | OnlyPillarContract        => Int32 -508
+      | NotAVault                 => Int32 -509
+      end
+    in
+    { _exception : "Error"; code : result_code }
+
+  
+contract VaultFactory
+
+(
+  contract_owner: ByStr20,
+  pillarToken: ByStr20
+)
+
+field vaults: Map ByStr20 Uint32 = Emp ByStr20 Uint32
+field vaultId: Map Uint32 ByStr20 = Emp Uint32 ByStr20
+field vaultByCollateral: Map ByStr20 (Map ByStr20 Bool) 
+  = Emp ByStr20 (Map ByStr20 Bool)
+
+field total_vaults: Uint32 = zero
+field total_vaults_occupied: Uint32 = zero
+
+field tokenAddress: ByStr20 = pillarToken
+
+field totalPillarMinted: Uint128 = uint128_zero
+field totalPillarRepaid: Uint128 = uint128_zero
+field deactivate: Bool = False
+
+field owner: ByStr20 = contract_owner
+
+procedure ThrowError(err : Error)
+  e = make_error err;
+  throw e
+end
+
+procedure isActive()
+  status <- deactivate;
+  match status with
+    | False =>
+    | True =>
+      err = ContractDeactivated;
+      ThrowError err
+  end
+end
+
+procedure onlyMintPillarTokensCallback(address: ByStr20)
+  isPillarContract = builtin eq address pillarToken;
+  match isPillarContract with
+  | True =>
+  | False =>
+    err = OnlyPillarContract;
+    ThrowError err
+  end
+end
+
+procedure notZeroAddress(address: ByStr20)
+  isZero = builtin eq address zero_address;
+  match isZero with
+  | False =>
+  | True =>
+    err = ShouldBeNonZeroAddress;
+    ThrowError err
+  end
+end
+
+procedure IsOwner(address: ByStr20)
+  o <- owner;
+  is_owner = builtin eq o address;
+  match is_owner with
+  | True =>
+  | False =>
+    err = CodeNotOwner;
+    ThrowError err
+  end
+end
+
+procedure checkExistingVault(vaultAddress: ByStr20)
+  vaultStatus <- vaults[vaultAddress];
+  status = decode_value vaultStatus;
+  vault_free = builtin eq status zero;
+  match vault_free with
+    | True =>
+    | False => 
+      err = VaultAlreadyCreated;
+      ThrowError err
+  end
+end
+
+procedure checkIfVaultIsOccupied(vaultAddress: ByStr20)
+  vaultStatus <- vaults[vaultAddress];
+  status = decode_value vaultStatus;
+  vault_free = builtin eq status two;
+  match vault_free with
+    | True =>
+    | False => 
+      err = OnlyOccupiedVaultsCanMint;
+      ThrowError err
+  end
+end
+
+procedure checkIfNewVaultCanOccupied()
+  tv <- total_vaults;
+  tvo <- total_vaults_occupied;
+  canBeCreated = builtin lt tvo tv;
+  match canBeCreated with
+    | True =>
+    | False =>
+    err = VaultNotAvailable;
+    ThrowError err
+  end
+end
+
+transition transferOwnership(newOwner: ByStr20)
+  IsOwner _sender;
+  owner := newOwner;
+  e = {_eventname : "TransferOwnership"; newOwner : newOwner};
+  event e
+end
+
+transition deactivateFactory()
+  IsOwner _sender;
+  isActive;
+  temp = True;
+  deactivate := temp;
+  e = {_eventname : "DeactivateFactory"};
+  event e
+end
+
+transition addNewVault(vaultAddress: ByStr20)
+  isActive;
+  IsOwner _sender;
+  checkExistingVault vaultAddress;
+  current_total_vaults <- total_vaults;
+  new_vault_id = builtin add current_total_vaults one;
+  vaults[vaultAddress] := one;
+  vaultId[new_vault_id] := vaultAddress;
+  total_vaults:= new_vault_id;
+  e = {_eventname : "AddedNewVault"; vaultAddress: vaultAddress; vaultId: new_vault_id};
+  event e
+end
+
+procedure checkIfItIsAVault(vaultAddress: ByStr20)
+  vaultStatus <- vaults[vaultAddress];
+  status = decode_value vaultStatus;
+  is_zero = builtin eq status zero;
+  match is_zero with 
+    | False =>
+    | True =>
+    err = NotAVault;
+    ThrowError err
+  end
+end
+
+transition getVaultCollateralCallback(collateralAddress: ByStr20)
+  checkIfItIsAVault _sender;
+  x = True;
+  vaultByCollateral[collateralAddress][_sender] :=   x
+end
+
+transition getNewVault(collateralAmount: Uint128)
+  isActive;
+  checkIfNewVaultCanOccupied;
+  vaults_occupied <- total_vaults_occupied;
+  vault_to_occupy = builtin add vaults_occupied one;
+  some_vaultAddressToUse <- vaultId[vault_to_occupy];
+  vaultAddress = decode_address some_vaultAddressToUse;
+  notZeroAddress vaultAddress;
+  vaults[vaultAddress] := two;
+  vaultId[vault_to_occupy] := vaultAddress;
+  total_vaults_occupied := vault_to_occupy;
+  
+  e = {_eventname : "AllocatedNewVault"; owner : _sender; vaultAddress: vaultAddress; vaultId : vault_to_occupy};
+  event e;
+  msg_to_vault = {_tag: "activate"; _recipient: vaultAddress; _amount: uint128_zero; userAddress: _sender; tokenAddress: pillarToken; amount: collateralAmount};
+  msgs = one_msg msg_to_vault;
+  send msgs;
+  
+  msg_to_vault = {_tag: "getVaultCollateral"; _recipient: vaultAddress; _amount: uint128_zero};
+  msgs = one_msg msg_to_vault;
+  send msgs
+end
+
+transition VaultMint(addressToSend: ByStr20, amount: Uint128)
+  isActive;
+  checkIfVaultIsOccupied _sender;
+  token <- tokenAddress;
+  e = {_eventname: "VaultFactoryMint"; vaultAddress: _sender; amount: amount; address: addressToSend};
+  event e;
+  msg_to_token_contract = {_tag : "Mint"; _recipient : token; _amount : uint128_zero; recipient : addressToSend; amount : amount};
+  msgs = one_msg msg_to_token_contract;
+  send msgs
+end
+
+transition collateralAddressCallback(collateral_contract: ByStr20, spender: ByStr20, amountDeducted: Uint128, vaultAddress: ByStr20)
+  checkIfVaultIsOccupied _sender;
+  msg_to_collateral = {_tag: "TransferFrom"; _recipient: collateral_contract; _amount: uint128_zero; from: spender; to: vaultAddress; amount: amountDeducted};
+  msgs = one_msg msg_to_collateral;
+  send msgs
+end
+
+transition RecipientAcceptTransferFrom(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+(*  to be complete*)
+end
+
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+(*  to be complete*)
+end
+
+transition RecipientAcceptTransfer(sender : ByStr20, recipient : ByStr20, amount : Uint128)
+  (*  to be complete*)
+end
+
+transition TransferSuccessCallBack(sender : ByStr20, recipient : ByStr20, amount : Uint128)
+  (*  to be complete*)
+end
+
+transition MintSuccessCallBack(minter : ByStr20, recipient : ByStr20, amount : Uint128)
+  (*to be complete*)
+  onlyMintPillarTokensCallback _sender;
+  current_pillar <- totalPillarMinted;
+  new_pillar_amount = builtin add current_pillar amount;
+  totalPillarMinted := new_pillar_amount
+end
+
+transition BurnSuccessCallBackFromVault(burner : ByStr20, burn_account : ByStr20, amount: Uint128)
+  (*to be complete*)
+  checkIfItIsAVault _sender;
+  current_pillar <- totalPillarRepaid;
+  new_pillar_amount = builtin add current_pillar amount;
+  totalPillarRepaid := new_pillar_amount
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
