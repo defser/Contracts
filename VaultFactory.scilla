@@ -1,308 +1,667 @@
 scilla_version 0
 
-import IntUtils
+import IntUtils BoolUtils
+
 library VaultFactoryAssets
-  let zero = Uint32 0
-  let one = Uint32 1
-  let two = Uint32 2
-  
-  let option_zero = Some {Uint32} zero
-  let option_one = Some {Uint32} one
-  let option_two = Some {Uint32} two
-  
-  
-  let uint128_zero = Uint128 0
-  let zero_address = 0x0000000000000000000000000000000000000000
-  let one_msg = 
-    fun (msg : Message) => 
-    let nil_msg = Nil {Message} in
-    Cons {Message} msg nil_msg
-  let two_msgs =
-    fun (msg1 : Message) =>
-    fun (msg2 : Message) =>
-      let msgs_tmp = one_msg msg2 in
-      Cons {Message} msg1 msgs_tmp
+    let zero_uint128 = Uint128 0
+    
+    let one_uint32 = Uint32 1
+    let one_uint128 = Uint128 1
 
-  let decode_value = 
-    fun (some_value: Option Uint32) =>
-      match some_value with 
-        | Some value => value
-        | None => zero
-      end
-  
-  let decode_address = 
-    fun(some_address: Option ByStr20) =>
-      match some_address with
-        | Some address => address
-        | None => zero_address
-      end
-  
-  type Error =
-    | CodeIsSender
-    | CodeNotOwner
-    | VaultAlreadyCreated
-    | OnlyOccupiedVaultsCanMint
-    | ContractDeactivated
-    | VaultNotAvailable
-    | ShouldBeNonZeroAddress
-    | OnlyPillarContract
-    | NotAVault
+    let ten_uint128 = Uint128 10
+    let ten_thousand = Uint128 10000
+    let hundred_uint128 = Uint128 100
 
-let make_error =
-  fun (result : Error) =>
-    let result_code = 
-      match result with
-      | CodeIsSender              => Int32 -501
-      | CodeNotOwner              => Int32 -502
-      | VaultAlreadyCreated       => Int32 -503
-      | OnlyOccupiedVaultsCanMint => Int32 -504
-      | ContractDeactivated       => Int32 -505
-      | VaultNotAvailable         => Int32 -506
-      | ShouldBeNonZeroAddress    => Int32 -507
-      | OnlyPillarContract        => Int32 -508
-      | NotAVault                 => Int32 -509
-      end
-    in
-    { _exception : "Error"; code : result_code }
+    let max_uint128 = Uint128 34028237000000000000000000000000000000
 
-  
-contract VaultFactory
+    let eighteen_uint32 = Uint32 18
 
-(
-  contract_owner: ByStr20,
-  pillarToken: ByStr20
+    let zero_bnum = BNum 0
+    let zero_address = 0x0000000000000000000000000000000000000000
+
+    let zero_uint256 = Uint256 0
+    let one_uint256 = Uint256 1
+    let ten_uint256 = Uint256 10
+    let hundred_uint256 = Uint256 100
+    let ten_thousand_uint256 = Uint256 10000
+
+    let get_address = 
+      fun (some_address: Option ByStr20) =>
+          match some_address with
+          | Some address => address
+          | None => zero_address
+          end
+
+    type Error =
+        | CallerNotVaultProxy
+        | CannotBeZero
+        | NotOwner
+        | LessThanCollateralizationRatio
+        | CannotLiquidate
+        | LessThanVaultPrice
+        | CannotLiquidateOwn
+
+    let make_error =
+        fun (result : Error) =>
+            let result_code = 
+                match result with
+                    | CallerNotVaultProxy            => Int32 -701
+                    | CannotBeZero                   => Int32 -702
+                    | NotOwner                       => Int32 -703
+                    | LessThanCollateralizationRatio => Int32 -704
+                    | CannotLiquidate                => Int32 -705
+                    | LessThanVaultPrice             => Int32 -706
+                    | CannotLiquidateOwn             => Int32 -706
+                end
+            in
+            { _exception : "Error"; code : result_code }
+    let one_msg = 
+        fun (msg : Message) => 
+            let nil_msg = Nil {Message} in
+            Cons {Message} msg nil_msg
+            
+    let two_msgs =
+        fun (msg1 : Message) =>
+        fun (msg2 : Message) =>
+            let msgs_tmp = one_msg msg2 in
+            Cons {Message} msg1 msgs_tmp
+
+              
+    let decode_value = 
+        fun (some_value: Option Uint128) =>
+            match some_value with 
+                | Some value => value
+                | None => zero_uint128
+             end
+    
+    let decode_value_uint256 = 
+        fun (some_value: Option Uint256) =>
+            match some_value with 
+                | Some value => value
+                | None => zero_uint256
+            end
+    
+    let decode_bnum = 
+        fun (some_bnum: Option BNum) =>
+            match some_bnum with 
+                | Some bnum => bnum
+                | None => zero_bnum
+            end
+
+    let calculateMarginalInterest = 
+        fun(pillar: Uint128) =>
+        fun(interestPer10000Tokens: Uint128) =>
+        fun(lastUpdatedBlock: BNum) =>
+        fun(currentBlock: BNum) =>
+        fun(bpy: Uint128) =>
+            let blockDiff = builtin bsub currentBlock lastUpdatedBlock in
+            let some_diff = builtin to_uint128 blockDiff in
+            let diff = decode_value some_diff in
+            let temp1 = builtin mul pillar diff in
+            let temp2 = builtin mul temp1 interestPer10000Tokens in
+            builtin div temp2 ten_thousand
+
+    let collateralizationRatio =
+        fun(collateral: Uint128) =>
+        fun(total_pillar: Uint128) =>
+        fun(collateralPrice: Uint32) =>
+        fun(collateralPriceDecimals: Uint32) =>
+        fun(pillarTokenDecimals: Uint32) =>
+        let is_zero = builtin lt collateral one_uint128 in
+            match is_zero with
+                | True =>
+                    zero_uint128
+                | False =>
+                    let is_total_pillar_zero = builtin lt total_pillar one_uint128 in
+                    match  is_total_pillar_zero with
+                        | True => 
+                            max_uint128
+                        | False =>         
+                            let exponentiator = ten_thousand_uint256 in
+                            let some_big_collateral = builtin to_uint256 collateral in
+                            let some_big_total_pillar = builtin to_uint256 total_pillar in
+                            let big_collateral = decode_value_uint256 some_big_collateral in
+                            let some_big_total_pillar = builtin to_uint256 total_pillar in
+                            let big_total_pillar = decode_value_uint256 some_big_total_pillar in
+                            let price_exponent = builtin pow ten_uint256 collateralPriceDecimals in
+                            let eighteen_exponent = builtin pow ten_uint256 eighteen_uint32 in
+                            let some_collateral_price = builtin to_uint256 collateralPrice in
+                            let collateral_price = decode_value_uint256 some_collateral_price in
+                            let temp1 = builtin mul big_collateral collateral_price in
+                            let temp2 = builtin mul temp1 price_exponent in
+                            let temp3 = builtin mul temp2 exponentiator in
+                            let temp4 = builtin div temp3 big_total_pillar in
+                            let temp5 = builtin div temp4 eighteen_exponent in
+                            let some_result = builtin to_uint128 temp5 in
+                            decode_value some_result
+                    end
+            end
+            
+contract VaultFactory(
+    storage: ByStr20 with contract field vaults: Map Uint32 ByStr20,
+                                   field total_vaults: Uint32,
+                                   field total_pillar_minted: Uint128,
+                                   field total_pillar_repaid: Uint128,
+                                   field total_collateral: Uint128,
+                                   field collateral_amount: Map Uint32 Uint128,
+                                   field pillar_borrowed: Map Uint32 Uint128,
+                                   field interest_accumulated: Map Uint32 Uint128,
+                                   field last_updated_at: Map Uint32 BNum
+                          end,
+    init_vault_proxy: ByStr20,
+    vault_params: ByStr20 with contract field governance: ByStr20,
+                                        field governanceProposalsExecuted: Map Uint32 Bool,
+                                        field minimum_collateral: Uint128,
+                                        field vault_price: Uint128,
+                                        field interest_rate_per_10000_token: Uint128,
+                                        field interest_last_updated_at: BNum,
+                                        field blocks_per_year: Uint128,
+                                        field minimum_collateralization_ratio: Uint128,
+                                        field burn_address: ByStr20, 
+                                        field insurance_address: ByStr20,
+                                        field dev_address: ByStr20,
+                                        field liquidation_penalty: Uint128,
+                                        field dev_share: Uint128
+                                end,
+    pillar_token: ByStr20,
+    pillar_decimals: Uint32,
+    collateral_token: ByStr20
 )
-
-field vaults: Map ByStr20 Uint32 = Emp ByStr20 Uint32
-field vaultId: Map Uint32 ByStr20 = Emp Uint32 ByStr20
-field vaultByCollateral: Map ByStr20 (Map ByStr20 Bool) 
-  = Emp ByStr20 (Map ByStr20 Bool)
-
-field total_vaults: Uint32 = zero
-field total_vaults_occupied: Uint32 = zero
-
-field tokenAddress: ByStr20 = pillarToken
-
-field totalPillarMinted: Uint128 = uint128_zero
-field totalPillarRepaid: Uint128 = uint128_zero
-field deactivate: Bool = False
-
-field owner: ByStr20 = contract_owner
 
 procedure ThrowError(err : Error)
   e = make_error err;
-  throw e
+  throw 
 end
 
-procedure isActive()
-  status <- deactivate;
-  match status with
-    | False =>
-    | True =>
-      err = ContractDeactivated;
-      ThrowError err
-  end
-end
-
-procedure onlyMintPillarTokensCallback(address: ByStr20)
-  isPillarContract = builtin eq address pillarToken;
-  match isPillarContract with
-  | True =>
-  | False =>
-    err = OnlyPillarContract;
-    ThrowError err
-  end
-end
-
-procedure notZeroAddress(address: ByStr20)
-  isZero = builtin eq address zero_address;
-  match isZero with
-  | False =>
-  | True =>
-    err = ShouldBeNonZeroAddress;
-    ThrowError err
-  end
-end
-
-procedure IsOwner(address: ByStr20)
-  o <- owner;
-  is_owner = builtin eq o address;
-  match is_owner with
-  | True =>
-  | False =>
-    err = CodeNotOwner;
-    ThrowError err
-  end
-end
-
-procedure checkExistingVault(vaultAddress: ByStr20)
-  vaultStatus <- vaults[vaultAddress];
-  status = decode_value vaultStatus;
-  vault_free = builtin eq status zero;
-  match vault_free with
+procedure IsVaultProxy(address: ByStr20)
+  is_vault_proxy = builtin eq address init_vault_proxy;
+  match is_vault_proxy with
     | True =>
     | False => 
-      err = VaultAlreadyCreated;
+      err = CallerNotVaultProxy;
+      ThrowError err
+  end
+    
+end
+
+
+procedure IsNotZero(value: Uint128)
+  is_zero = builtin eq value zero_uint128;
+  match is_zero with
+    | False =>
+    | True =>
+      err = CannotBeZero;
       ThrowError err
   end
 end
 
-procedure checkIfVaultIsOccupied(vaultAddress: ByStr20)
-  vaultStatus <- vaults[vaultAddress];
-  status = decode_value vaultStatus;
-  vault_free = builtin eq status two;
-  match vault_free with
+procedure VerifyVaultOwner(vaultId: Uint32, address: ByStr20)
+    some_owner <-& storage.vaults[vaultId];
+    owner = get_address some_owner;
+    is_owner = builtin eq address owner;
+    match is_owner with
+        | True =>
+        | False => 
+            err = NotOwner;
+            ThrowError err
+    end
+end
+
+procedure IsNotVaultOwner(vaultId: Uint32, address: ByStr20)
+    some_owner <-& storage.vaults[vaultId];
+    owner = get_address some_owner;
+    is_owner = builtin eq address owner;
+    match is_owner with
+        | False =>
+        | True => 
+            err = CannotLiquidateOwn;
+            ThrowError err
+    end
+end
+
+procedure SafeTransferFrom(tokenContract: ByStr20, from: ByStr20, to: ByStr20, amount: Uint128)
+    msg_to_token_contract = {_tag: "TransferFrom"; _recipient: tokenContract; _amount: zero_uint128;
+                                    from: from; to: to; amount: amount
+                                };
+    msgs = one_msg msg_to_token_contract;
+    send msgs
+end
+
+procedure SafeTransfer(tokenContract: ByStr20, to: ByStr20, amount: Uint128)
+    msg_to_token_contract = {_tag: "Transfer"; _recipient: tokenContract; _amount: zero_uint128;
+                                    to: to; amount: amount
+                            };
+    msgs = one_msg msg_to_token_contract;
+    send msgs
+end
+
+procedure SafeBurnFrom(tokenContract: ByStr20, from: ByStr20, amount: Uint128)
+    msg_to_token_contract = {_tag: "BurnFrom"; _recipient: tokenContract; _amount: zero_uint128;
+                                    from: from; amount: amount
+                                };
+    msgs = one_msg msg_to_token_contract;
+    send msgs
+end
+
+
+procedure UpdateVaultStorageForMethodAddCollateral(vaultId: Uint32, collateralAmount: Uint128)
+    
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+
+    msg_to_storage = {_tag : "OperationAddCollateral"; _recipient : storage; _amount : zero_uint128; 
+                      vaultId: vaultId; collateralAdded: collateralAmount; marginalInterest: marginalInterest};
+    msgs = one_msg msg_to_storage;
+    send msgs
+end
+
+procedure CheckCollateralizationRatio(expectedRatio: Uint128, actualRatio: Uint128)
+    is_less_than = builtin lt actualRatio expectedRatio;
+    match is_less_than with
+        | True => 
+            err = LessThanCollateralizationRatio;
+            ThrowError err
+        | False =>
+    end
+end
+
+procedure IsLiquidationPossible(expectedRatio: Uint128, actualRatio: Uint128)
+    is_less_than = builtin lt actualRatio expectedRatio;
+    match is_less_than with
+    | True => 
+    | False =>
+        err = CannotLiquidate;
+        ThrowError err
+    end
+end
+
+procedure CanReleaseCollateral(collateral: Uint128, pillar: Uint128, price: Uint32, decimals: Uint32, minColRatio: Uint128)
+    is_pillar_borrowed = builtin eq pillar zero_uint128;
+    match is_pillar_borrowed with
+        | True =>
+        | False =>
+            cr = collateralizationRatio collateral pillar price decimals pillar_decimals;
+            CheckCollateralizationRatio minColRatio cr
+    end
+end
+
+procedure CheckVaultPrice()
+  vp <-& vault_params.vault_price;
+  is_less_than_vault_price = builtin lt _amount vp;
+  
+  match is_less_than_vault_price with 
     | True =>
-    | False => 
-      err = OnlyOccupiedVaultsCanMint;
+      err = LessThanVaultPrice;
       ThrowError err
-  end
-end
-
-procedure checkIfNewVaultCanOccupied()
-  tv <- total_vaults;
-  tvo <- total_vaults_occupied;
-  canBeCreated = builtin lt tvo tv;
-  match canBeCreated with
-    | True =>
     | False =>
-    err = VaultNotAvailable;
-    ThrowError err
   end
 end
 
-transition transferOwnership(newOwner: ByStr20)
-  IsOwner _sender;
-  owner := newOwner;
-  e = {_eventname : "TransferOwnership"; newOwner : newOwner};
-  event e
+transition EmitCollateralizationRatio(vaultId: Uint32, price: Uint32, decimals: Uint32)
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+    minColRatio <-& vault_params.minimum_collateralization_ratio;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+
+    totalInterest = builtin add marginalInterest currentInterest;
+    totalPillar = builtin add currentPillar totalInterest;
+
+
+    cr = collateralizationRatio collateral totalPillar price decimals pillar_decimals;
+    e = {_eventname: "CollateralizationRatio"; currentRatio: cr; liquidationRatio: minColRatio; collateral: collateral;
+                                debt: totalPillar; pillarBorrowed: currentPillar; interest: totalInterest; lastUpdatedAt: lastUpdatedAt
+        };
+    event e
 end
 
-transition deactivateFactory()
-  IsOwner _sender;
-  isActive;
-  temp = True;
-  deactivate := temp;
-  e = {_eventname : "DeactivateFactory"};
-  event e
+procedure UpdateVaultStorageForMethodMintPillar(vaultId: Uint32, receiver: ByStr20, pillarToBeMinted: Uint128, price: Uint32, decimals: Uint32)
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+    minColRatio <-& vault_params.minimum_collateralization_ratio;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+    
+    totalPillar = 
+        let temp  = builtin add currentPillar currentInterest in
+        let temp2 = builtin add temp marginalInterest in
+        builtin add temp2 pillarToBeMinted;
+    
+    cr = collateralizationRatio collateral totalPillar price decimals pillar_decimals;
+    
+    CheckCollateralizationRatio minColRatio cr;
+
+    (* e = {_eventname: "ColWhileMinting"; minColRatio: minColRatio; cr : cr};
+    event e *)
+
+    msg_to_storage = {_tag : "OperationMintPillar"; _recipient : storage; _amount : zero_uint128; 
+                      vaultId: vaultId; pillarMinted: pillarToBeMinted; marginalInterest: marginalInterest};
+
+    msg_to_token_contract = {_tag : "Mint"; _recipient : pillar_token; _amount : zero_uint128; recipient : receiver; amount : pillarToBeMinted};
+
+    msgs = two_msgs msg_to_storage msg_to_token_contract;
+    send msgs
 end
 
-transition addNewVault(vaultAddress: ByStr20)
-  isActive;
-  IsOwner _sender;
-  checkExistingVault vaultAddress;
-  current_total_vaults <- total_vaults;
-  new_vault_id = builtin add current_total_vaults one;
-  vaults[vaultAddress] := one;
-  vaultId[new_vault_id] := vaultAddress;
-  total_vaults:= new_vault_id;
-  e = {_eventname : "AddedNewVault"; vaultAddress: vaultAddress; vaultId: new_vault_id};
-  event e
+procedure UpdateVaultStorageMethodForLiquidate(vaultId: Uint32, initiator: ByStr20, price: Uint32, decimals :Uint32)
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+    minColRatio <-& vault_params.minimum_collateralization_ratio;
+    liquidationPenatlty <-& vault_params.liquidation_penalty;
+
+    penaltyAmount = let temp = builtin mul liquidationPenatlty collateral in builtin div temp hundred_uint128;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+    totalInterest = builtin add currentInterest marginalInterest;
+    totalDebt = builtin add totalInterest currentPillar;
+
+    cr = collateralizationRatio collateral totalDebt price decimals pillar_decimals;
+    IsLiquidationPossible minColRatio cr;
+
+    insuranceWallet <-& vault_params.insurance_address;
+    
+    SafeTransferFrom pillar_token initiator insuranceWallet totalInterest;
+    SafeBurnFrom pillar_token initiator currentPillar;
+    
+    devShare <-& vault_params.dev_share;
+    devAmount = let temp = builtin mul penaltyAmount devShare in builtin div temp hundred_uint128;
+    burnAmount = builtin sub penaltyAmount devAmount;
+    
+    da <-& vault_params.dev_address;
+    ba <-& vault_params.burn_address;
+
+    SafeTransfer collateral_token da devAmount;
+    SafeTransfer collateral_token ba burnAmount;
+
+    msg_to_storage = {_tag : "OperationLiquidateVault"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; newOwner: initiator; amount: totalDebt; penalty: penaltyAmount};
+    msgs = one_msg msg_to_storage;
+    send msgs;
+
+    e = {_eventname: "Liquidate"; vault_id: vaultId; interestPaid: totalInterest; principlePaid: currentPillar; penalty: penaltyAmount};
+    event e
 end
 
-procedure checkIfItIsAVault(vaultAddress: ByStr20)
-  vaultStatus <- vaults[vaultAddress];
-  status = decode_value vaultStatus;
-  is_zero = builtin eq status zero;
-  match is_zero with 
-    | False =>
-    | True =>
-    err = NotAVault;
-    ThrowError err
-  end
+procedure UpdateVaultStorageMethodForReleaseCollateral(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32, receiver: ByStr20)
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+    newCollateral = builtin sub collateral amount;
+
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+    minColRatio <-& vault_params.minimum_collateralization_ratio;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+    totalInterest = builtin add currentInterest marginalInterest;
+    totalDebt = builtin add totalInterest currentPillar;
+
+    cr = collateralizationRatio newCollateral totalDebt price decimals pillar_decimals;
+    CanReleaseCollateral collateral totalDebt price decimals minColRatio;
+
+    SafeTransfer collateral_token receiver amount;
+
+    msg_to_storage = {_tag : "OperationReleaseCollateral"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; amount: amount; maringalInterest: marginalInterest};
+    msgs = one_msg msg_to_storage;
+    send msgs
+
 end
 
-transition getVaultCollateralCallback(collateralAddress: ByStr20)
-  checkIfItIsAVault _sender;
-  x = True;
-  vaultByCollateral[collateralAddress][_sender] :=   x
+procedure UpdateVaultStorageMethodForRepay(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+    minColRatio <-& vault_params.minimum_collateralization_ratio;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+    totalInterest = builtin add currentInterest marginalInterest;
+    totalDebt = builtin add totalInterest currentPillar;
+
+    is_repay_amount_greater_than_total_debt = builtin lt totalDebt amount;
+
+    match is_repay_amount_greater_than_total_debt with
+        | True =>
+            msg_to_storage = {_tag : "OperationRepayTotalDebt"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; amount: totalDebt };
+            msgs = one_msg msg_to_storage;
+            send msgs;
+            insuranceWallet <-& vault_params.insurance_address;
+                
+            SafeTransferFrom pillar_token initiator insuranceWallet totalInterest;
+            SafeBurnFrom pillar_token initiator currentPillar;
+            e = {_eventname: "Repay"; vault_id: vaultId; interestPaid: totalInterest; principlePaid: currentPillar};
+            event e
+        | False =>
+            is_repay_amount_greater_than_total_interest = builtin lt totalInterest amount;
+            match is_repay_amount_greater_than_total_interest with
+                | True =>
+                    principleReduced = builtin sub amount totalInterest;
+                    insuranceWallet <-& vault_params.insurance_address;
+                    msg_to_storage = {_tag : "OperationRepayTotalInterestWithSomePillarBorrowed"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; principleReduced: principleReduced; interestRepaid: totalInterest };
+                    msgs = one_msg msg_to_storage;
+                    send msgs;
+                    SafeTransferFrom pillar_token initiator insuranceWallet totalInterest;
+                    SafeBurnFrom pillar_token initiator principleReduced;
+                    e = {_eventname: "Repay"; vault_id: vaultId; interestPaid: totalInterest; principlePaid: principleReduced};
+                    event e
+                | False =>
+                    is_repay_amount_greater_than_marginal_interest = builtin lt marginalInterest amount;
+                    match is_repay_amount_greater_than_marginal_interest with
+                        | True =>
+                        interestReduced = builtin sub amount marginalInterest;
+                        insuranceWallet <-& vault_params.insurance_address;
+                        msg_to_storage = {_tag : "OperationRepayOnlyInterest"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; amount: interestReduced };
+                        msgs = one_msg msg_to_storage;
+                        send msgs;
+                        SafeTransferFrom pillar_token initiator insuranceWallet amount;
+                        e = {_eventname: "Repay"; vault_id: vaultId; interestPaid: amount; principlePaid: zero_uint128};
+                        event e
+                        | False =>
+                            interestToAdd = builtin sub marginalInterest amount;
+                            insuranceWallet <-& vault_params.insurance_address;
+                            
+                            msg_to_storage = {_tag : "OperationRepayAndAddRemainingInterest"; _recipient : storage; _amount : zero_uint128; 
+                                vaultId: vaultId; refactoredInterest: interestToAdd; amountPaid: amount
+                            };
+
+                            msgs = one_msg msg_to_storage;
+                            send msgs;
+                            SafeTransferFrom pillar_token initiator insuranceWallet amount;
+                            e = {_eventname: "Repay"; vault_id: vaultId; interestPaid: amount; principlePaid: zero_uint128};
+                            event e
+                    end
+            end
+    end
 end
 
-transition getNewVault(collateralAmount: Uint128)
-  isActive;
-  checkIfNewVaultCanOccupied;
-  vaults_occupied <- total_vaults_occupied;
-  vault_to_occupy = builtin add vaults_occupied one;
-  some_vaultAddressToUse <- vaultId[vault_to_occupy];
-  vaultAddress = decode_address some_vaultAddressToUse;
-  notZeroAddress vaultAddress;
-  vaults[vaultAddress] := two;
-  vaultId[vault_to_occupy] := vaultAddress;
-  total_vaults_occupied := vault_to_occupy;
-  
-  e = {_eventname : "AllocatedNewVault"; owner : _sender; vaultAddress: vaultAddress; vaultId : vault_to_occupy};
-  event e;
-  msg_to_vault = {_tag: "activate"; _recipient: vaultAddress; _amount: uint128_zero; userAddress: _sender; tokenAddress: pillarToken; amount: collateralAmount};
-  msgs = one_msg msg_to_vault;
-  send msgs;
-  
-  msg_to_vault = {_tag: "getVaultCollateral"; _recipient: vaultAddress; _amount: uint128_zero};
-  msgs = one_msg msg_to_vault;
+(* can be directly called *)
+transition GetNewVault()
+    CheckVaultPrice;
+    accept;
+    currentTotalVaults <-& storage.total_vaults;
+    newVaultId = builtin add currentTotalVaults one_uint32;
+    msg_to_storage = {_tag : "OperationGetNewVault"; _recipient : storage; _amount : zero_uint128; 
+                      vaultId: newVaultId; initiator: _sender};
+    msgs = one_msg msg_to_storage;
+    send msgs;
+    e = {_eventname: "CreateNewVault"; vault_id: newVaultId; owner: _sender};
+    event e
+end
+
+(* Can be directly called. No need to use proxy *)
+transition AddCollateral(vaultId: Uint32, amount: Uint128)
+    VerifyVaultOwner vaultId _sender;
+    IsNotZero amount;
+    UpdateVaultStorageForMethodAddCollateral vaultId amount;
+    SafeTransferFrom collateral_token _sender _this_address amount;
+    e = {_eventname: "AddCollateral"; vault_id: vaultId; amount: amount};
+    event e
+end
+
+(* Can be only called by proxy *)
+transition MintPillar(vaultId: Uint32, initiator: ByStr20, receiver: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
+    VerifyVaultOwner vaultId initiator;
+    IsVaultProxy _sender;
+    IsNotZero amount;
+    UpdateVaultStorageForMethodMintPillar vaultId receiver amount price decimals;
+    e = {_eventname: "MintPillar"; vault_id: vaultId; amount: amount};
+    event e
+end
+
+(* Can only be called by proxy *)
+transition RepayPillar(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
+    VerifyVaultOwner vaultId initiator;
+    IsVaultProxy _sender;
+    IsNotZero amount;
+    UpdateVaultStorageMethodForRepay vaultId initiator amount price decimals
+end
+
+(* can only be called by proxy *)
+transition LiquidateVault(vaultId: Uint32, initiator: ByStr20, price: Uint32, decimals: Uint32)
+    IsNotVaultOwner vaultId initiator;
+    IsVaultProxy _sender;
+    UpdateVaultStorageMethodForLiquidate vaultId initiator price decimals
+end
+
+(* can be only called by proxy *)
+transition ReleaseCollateral(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
+    VerifyVaultOwner vaultId initiator;
+    IsVaultProxy _sender;
+    e = {_eventname: "ReleaseCollateral"; vault_id: vaultId; amount: amount};
+    event e
+end
+
+(* can be only called by proxy *)
+transition transferOutZIL(address: ByStr20, amount: Uint128)
+  IsVaultProxy _sender;
+  msg = {_tag:""; _recipient : address; _amount : amount};
+  msgs = one_msg msg;
   send msgs
 end
 
-transition VaultMint(addressToSend: ByStr20, amount: Uint128)
-  isActive;
-  checkIfVaultIsOccupied _sender;
-  token <- tokenAddress;
-  e = {_eventname: "VaultFactoryMint"; vaultAddress: _sender; amount: amount; address: addressToSend};
-  event e;
-  msg_to_token_contract = {_tag : "Mint"; _recipient : token; _amount : uint128_zero; recipient : addressToSend; amount : amount};
-  msgs = one_msg msg_to_token_contract;
-  send msgs
+transition TransferSuccessCallBack(sender : ByStr20, recipient: ByStr20, amount: Uint128)
+    e = {_eventname: "TransferSuccessCallBack"; sender : sender; recipient: recipient; amount: amount};
+    event e
 end
 
-transition collateralAddressCallback(collateral_contract: ByStr20, spender: ByStr20, amountDeducted: Uint128, vaultAddress: ByStr20)
-  checkIfVaultIsOccupied _sender;
-  msg_to_collateral = {_tag: "TransferFrom"; _recipient: collateral_contract; _amount: uint128_zero; from: spender; to: vaultAddress; amount: amountDeducted};
-  msgs = one_msg msg_to_collateral;
-  send msgs
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender : ByStr20, recipient: ByStr20, amount: Uint128)
+    e = {_eventname: "TransferFromSuccessCallBack"; initiator: initiator; sender : sender; recipient: recipient; amount: amount};
+    event e
 end
 
-transition RecipientAcceptTransferFrom(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
-(*  to be complete*)
+transition RecipientAcceptTransferFrom(initiator: ByStr20, sender : ByStr20, recipient: ByStr20, amount: Uint128)
+    e = {_eventname: "RecipientAcceptTransferFrom"; initiator: initiator; sender : sender; recipient: recipient; amount: amount};
+    event e
 end
 
-transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
-(*  to be complete*)
+transition MintSuccessCallBack(minter: ByStr20, recipient: ByStr20, amount: Uint128)
+    e = {_eventname: "MintSuccessCallBack"; minter: minter; recipient : recipient; amount: amount};
+    event e
 end
 
-transition RecipientAcceptTransfer(sender : ByStr20, recipient : ByStr20, amount : Uint128)
-  (*  to be complete*)
+transition BurnSuccessCallBack(burner : ByStr20, burn_account : ByStr20, amount : Uint128)
+    e = {_eventname : "BurnSuccessCallBack"; burner : burner; burn_account : burn_account; amount : amount};
+    event e
 end
 
-transition TransferSuccessCallBack(sender : ByStr20, recipient : ByStr20, amount : Uint128)
-  (*  to be complete*)
-end
-
-transition MintSuccessCallBack(minter : ByStr20, recipient : ByStr20, amount : Uint128)
-  (*to be complete*)
-  onlyMintPillarTokensCallback _sender;
-  current_pillar <- totalPillarMinted;
-  new_pillar_amount = builtin add current_pillar amount;
-  totalPillarMinted := new_pillar_amount
-end
-
-transition BurnSuccessCallBackFromVault(burner : ByStr20, burn_account : ByStr20, amount: Uint128)
-  (*to be complete*)
-  checkIfItIsAVault _sender;
-  current_pillar <- totalPillarRepaid;
-  new_pillar_amount = builtin add current_pillar amount;
-  totalPillarRepaid := new_pillar_amount
+transition BurnFromSuccessCallBack(burner : ByStr20, burn_account : ByStr20, amount : Uint128)
+    e = {_eventname : "BurnFromSuccessCallBack"; burner : burner; burn_account : burn_account; amount : amount};
+    event e
 end
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+(* let temp = builtin add collateralPriceDecimals pillarTokenDecimals in
+let exponent = builtin pow ten_uint128 temp in
+let exponent18 = builtin pow ten_uint128 eighteen_uint32 in
+let some_price = builtin to_uint128 collateralPrice in
+let price = decode_value some_price in
+let temp = builtin mul price collateral in
+let temp2 = builtin mul temp ten_thousand in
+let temp3 = builtin div temp2 total_pillar in
+let some_big_temp3 = builtin to_uint256 temp3 in
+let some_big_exponent = builtin to_uint256 exponent in
+let big_temp3 = decode_value_uint256 some_big_temp3 in
+let big_exponent = decode_value_uint256 some_big_exponent in
+let temp4 = builtin mul big_temp3 big_exponent in
+let some_big_exponent18 = builtin to_uint256 exponent18 in
+let big_exponent18 = decode_value_uint256 some_big_exponent18 in
+let big_result = builtin div temp4 big_exponent18 in
+let some_result = builtin to_uint128 big_result in
+decode_value some_result *)
