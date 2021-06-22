@@ -596,7 +596,7 @@ transition LiquidateDirectly(col: String, vaultFactory: ByStr20, vaultId: Uint32
   end
 end
 
-transition ReleaseCollateral(msg: String, sign: ByStr64, col: String, vaultFactory: ByStr20, vaultId: Uint32, amount: Uint128)
+transition ReleaseCollateral(msg: String, sign: ByStr64, col: String, vaultFactory: ByStr20, vaultId: Uint32, amount: Uint128, receiver: ByStr20)
   UpdatePriceInternal msg sign;
   some_col_contract <- tokenNameToCollateralContract[col];
   address = decode_address some_col_contract;
@@ -618,7 +618,7 @@ transition ReleaseCollateral(msg: String, sign: ByStr64, col: String, vaultFacto
       
       msg_to_vault_factory = {_tag : "ReleaseCollateral"; _recipient : vaultFactory; _amount : zero_uint128; 
                               vaultId : vaultId; initiator : _sender; amount: amount;
-                              price: p; decimals: d};
+                              price: p; decimals: d; receiver: receiver};
       msgs = one_msg msg_to_vault_factory;
       send msgs
   end

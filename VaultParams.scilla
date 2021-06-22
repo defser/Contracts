@@ -37,7 +37,6 @@ library VaultParamsAssets
 contract VaultParams
 (
     init_governance: ByStr20,
-    init_minimum_collateral: Uint128,
     init_minimum_collateral_ratio: Uint128,
     init_liquidation_penalty: Uint128,
     init_vault_price: Uint128,
@@ -52,8 +51,6 @@ field governance: ByStr20 = init_governance
 field pending_governance : Option ByStr20 = None {ByStr20}
 field governanceProposalsExecuted: Map Uint32 Bool = Emp Uint32 Bool
 
-
-field minimum_collateral: Uint128 = init_minimum_collateral
 field vault_price: Uint128 = init_vault_price
 field interest_rate_per_10000_token: Uint128 = Uint128 100
 field interest_last_updated_at: BNum = BNum 0
@@ -135,15 +132,6 @@ transition ConfirmGovernanceTransfer ()
       end
   | None =>
   end
-end
-
-transition ChangeMinimumCollateral(new_minimum_collateral: Uint128, proposalId: Uint32)
-  IsGovernance _sender;
-  IsProposalExecuted proposalId;
-  minimum_collateral := new_minimum_collateral;
-  e = {_eventname : "ChangeMinimumCollateral"; newMinimumCollateral : new_minimum_collateral};
-  event e;
-  UpdateGovernanceProposalStatus proposalId
 end
 
 transition ChangeInterestRate(new_interest_rate: Uint128, proposalId: Uint32)

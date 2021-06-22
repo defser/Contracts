@@ -194,6 +194,10 @@ transition OperationGetNewVault(
   CheckVaultFactory _sender;
   vaults[vaultId] := initiator;
   total_vaults:= vaultId;
+  
+  currentBlock <-& BLOCKNUMBER;
+  last_updated_at[vaultId] := currentBlock;
+  
   Stat vaultId
 end
 

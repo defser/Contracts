@@ -99,7 +99,8 @@ library VaultFactoryAssets
             let diff = decode_value some_diff in
             let temp1 = builtin mul pillar diff in
             let temp2 = builtin mul temp1 interestPer10000Tokens in
-            builtin div temp2 ten_thousand
+            let temp3 = builtin div temp2 bpy in
+            builtin div temp3 ten_thousand
 
     let collateralizationRatio =
         fun(collateral: Uint128) =>
@@ -151,7 +152,6 @@ contract VaultFactory(
     init_vault_proxy: ByStr20,
     vault_params: ByStr20 with contract field governance: ByStr20,
                                         field governanceProposalsExecuted: Map Uint32 Bool,
-                                        field minimum_collateral: Uint128,
                                         field vault_price: Uint128,
                                         field interest_rate_per_10000_token: Uint128,
                                         field interest_last_updated_at: BNum,
@@ -310,6 +310,37 @@ procedure CheckVaultPrice()
   end
 end
 
+transition EmitMarginalInterest(vaultId: Uint32, price: Uint32, decimals: Uint32)
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+
+    some_pillar <-& storage.pillar_borrowed[vaultId];
+    currentPillar = decode_value some_pillar;
+
+    some_interest <-& storage.interest_accumulated[vaultId];
+    currentInterest = decode_value some_interest;
+
+    some_last_updated <-& storage.last_updated_at[vaultId];
+    lastUpdatedAt = decode_bnum some_last_updated;
+
+    currentBlock <-& BLOCKNUMBER;
+
+    interestRate <-& vault_params.interest_rate_per_10000_token;
+    blocksPerYear <-& vault_params.blocks_per_year;
+    minColRatio <-& vault_params.minimum_collateralization_ratio;
+
+    marginalInterest = calculateMarginalInterest currentPillar interestRate lastUpdatedAt currentBlock blocksPerYear;
+
+    totalInterest = builtin add marginalInterest currentInterest;
+    totalPillar = builtin add currentPillar totalInterest;
+
+    e = {_eventname: "MarginalInterest"; liquidationRatio: minColRatio; collateral: collateral;
+                                debt: totalPillar; pillarBorrowed: currentPillar; interest: totalInterest; 
+                                marginalInterest: marginalInterest; lastUpdatedAt: lastUpdatedAt; currentBlock: currentBlock
+        };
+    event e
+end
+
 transition EmitCollateralizationRatio(vaultId: Uint32, price: Uint32, decimals: Uint32)
     some_collateral <-& storage.collateral_amount[vaultId];
     collateral = decode_value some_collateral;
@@ -390,6 +421,7 @@ procedure UpdateVaultStorageMethodForLiquidate(vaultId: Uint32, initiator: ByStr
 
     some_pillar <-& storage.pillar_borrowed[vaultId];
     currentPillar = decode_value some_pillar;
+    IsNotZero currentPillar;
 
     some_interest <-& storage.interest_accumulated[vaultId];
     currentInterest = decode_value some_interest;
@@ -432,7 +464,7 @@ procedure UpdateVaultStorageMethodForLiquidate(vaultId: Uint32, initiator: ByStr
     msgs = one_msg msg_to_storage;
     send msgs;
 
-    e = {_eventname: "Liquidate"; vault_id: vaultId; interestPaid: totalInterest; principlePaid: currentPillar; penalty: penaltyAmount};
+    e = {_eventname: "Liquidate"; vault_id: vaultId; interestPaid: totalInterest; principlePaid: currentPillar; penalty: penaltyAmount; newOwner: initiator};
     event e
 end
 
@@ -461,11 +493,11 @@ procedure UpdateVaultStorageMethodForReleaseCollateral(vaultId: Uint32, initiato
     totalDebt = builtin add totalInterest currentPillar;
 
     cr = collateralizationRatio newCollateral totalDebt price decimals pillar_decimals;
-    CanReleaseCollateral collateral totalDebt price decimals minColRatio;
+    CanReleaseCollateral newCollateral totalDebt price decimals minColRatio;
 
     SafeTransfer collateral_token receiver amount;
 
-    msg_to_storage = {_tag : "OperationReleaseCollateral"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; amount: amount; maringalInterest: marginalInterest};
+    msg_to_storage = {_tag : "OperationReleaseCollateral"; _recipient : storage; _amount : zero_uint128; vaultId: vaultId; collateralReleased: amount; marginalInterest: marginalInterest};
     msgs = one_msg msg_to_storage;
     send msgs
 
@@ -600,9 +632,12 @@ transition LiquidateVault(vaultId: Uint32, initiator: ByStr20, price: Uint32, de
 end
 
 (* can be only called by proxy *)
-transition ReleaseCollateral(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
+transition ReleaseCollateral(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32, receiver: ByStr20)
     VerifyVaultOwner vaultId initiator;
     IsVaultProxy _sender;
+    
+    UpdateVaultStorageMethodForReleaseCollateral vaultId initiator amount price decimals receiver;
+
     e = {_eventname: "ReleaseCollateral"; vault_id: vaultId; amount: amount};
     event e
 end
