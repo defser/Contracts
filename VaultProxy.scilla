@@ -633,6 +633,14 @@ transition TransferZil(vaultFactory: ByStr20, receiver: ByStr20, amount: Uint128
   send msgs
 end
 
+transition RemoveCollateral(vaultFactory: ByStr20, receiver: ByStr20, amount: Uint128)
+  IsOwner _sender;
+  
+  msg_to_vault_factory = {_tag : "transferOutCollateral"; _recipient : vaultFactory; _amount : zero_uint128; 
+                            address: receiver; amount: amount };
+  msgs = one_msg msg_to_vault_factory;
+  send msgs
+end
 
 
 

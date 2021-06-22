@@ -650,6 +650,11 @@ transition transferOutZIL(address: ByStr20, amount: Uint128)
   send msgs
 end
 
+transition transferOutCollateral(address: ByStr20, amount: Uint128)
+    IsVaultProxy _sender;
+    SafeTransfer collateral_token address amount
+end
+
 transition TransferSuccessCallBack(sender : ByStr20, recipient: ByStr20, amount: Uint128)
     e = {_eventname: "TransferSuccessCallBack"; sender : sender; recipient: recipient; amount: amount};
     event e
