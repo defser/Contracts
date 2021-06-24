@@ -582,7 +582,7 @@ procedure UpdateVaultStorageMethodForRepay(vaultId: Uint32, initiator: ByStr20, 
     end
 end
 
-(* can be directly called *)
+(* Can be directly called. No need to use proxy *)
 transition GetNewVault()
     CheckVaultPrice;
     accept;
@@ -650,6 +650,7 @@ transition transferOutZIL(address: ByStr20, amount: Uint128)
   send msgs
 end
 
+(* can be only called by proxy *)
 transition transferOutCollateral(address: ByStr20, amount: Uint128)
     IsVaultProxy _sender;
     SafeTransfer collateral_token address amount

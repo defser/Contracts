@@ -84,6 +84,7 @@ transition ConfirmAdminTransfer ()
 end
 
 transition AddVaultFactory(new_vault_factory: ByStr20)
+  IsAdmin _sender;
   active_vault_factories[new_vault_factory] := true;
   e = {_eventname : "AddVaultFactory"; vaultFactory : new_vault_factory};
   event e
@@ -91,6 +92,7 @@ end
 
 transition RemoveVaultFactory(vault_factory: ByStr20)
   (* active_vault_factories[vault_factory] := false; *)
+  IsAdmin _sender;
   delete active_vault_factories[vault_factory];
   e = {_eventname : "RemoveVaultFactory"; vaultFactory : vault_factory};
   event e
