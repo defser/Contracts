@@ -12,7 +12,7 @@ library VaultFactoryAssets
     let ten_thousand = Uint128 10000
     let hundred_uint128 = Uint128 100
 
-    let max_uint128 = Uint128 34028237000000000000000000000000000000
+    let max_uint128 = Uint128 340282366920938463463374607431768211455
 
     let eighteen_uint32 = Uint32 18
 
