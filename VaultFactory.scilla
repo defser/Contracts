@@ -3,6 +3,9 @@ scilla_version 0
 import IntUtils BoolUtils
 
 library VaultFactoryAssets
+    let false = False
+    let true = True
+    
     let zero_uint128 = Uint128 0
     
     let one_uint32 = Uint32 1
@@ -40,6 +43,11 @@ library VaultFactoryAssets
         | CannotLiquidate
         | LessThanVaultPrice
         | CannotLiquidateOwn
+        | CantUseAsUserMigrated
+        | ShouldBeZeroAddress
+        | VaultNotMigratedFromPreviousVersion
+        | CallerNotOldVersion
+        | CannotUseOldVault
 
     let make_error =
         fun (result : Error) =>
@@ -52,6 +60,11 @@ library VaultFactoryAssets
                     | CannotLiquidate                => Int32 -705
                     | LessThanVaultPrice             => Int32 -706
                     | CannotLiquidateOwn             => Int32 -706
+                    | CantUseAsUserMigrated          => Int32 -707
+                    | ShouldBeZeroAddress            => Int32 -708
+                    | VaultNotMigratedFromPreviousVersion => Int32 -709
+                    | CallerNotOldVersion            => Int32 -710
+                    | CannotUseOldVault              => Int32 -711
                 end
             in
             { _exception : "Error"; code : result_code }
@@ -66,7 +79,14 @@ library VaultFactoryAssets
             let msgs_tmp = one_msg msg2 in
             Cons {Message} msg1 msgs_tmp
 
-              
+    
+    let get_bool = 
+        fun (some_bool: Option Bool) =>
+            match some_bool with
+            | Some bool => bool
+            | None => false
+            end
+
     let decode_value = 
         fun (some_value: Option Uint128) =>
             match some_value with 
@@ -165,12 +185,34 @@ contract VaultFactory(
                                 end,
     pillar_token: ByStr20,
     pillar_decimals: Uint32,
-    collateral_token: ByStr20
+    collateral_token: ByStr20,
+    (* below address should be address(0) if it is starting version *)
+    previous_version_address: ByStr20,
+    (* below value has no significance *)
+    version: Uint32
 )
+
+field factory_version : Uint32 = version
+field migrated: Map Uint32 Bool = Emp Uint32 Bool
+field activeMsgFromPreviousVersion: Map Uint32 Bool = Emp Uint32 Bool
+
+(* zero_address means no migration yet. any other address mean migration done. new migration can be set by proxy and proxy's admin only once *)
+field migrateAbleContract: ByStr20 = zero_address
 
 procedure ThrowError(err : Error)
   e = make_error err;
   throw 
+end
+
+procedure ThrowErrorIfUserHasMigrated(vaultId: Uint32)
+    some_migrated <- migrated[vaultId];
+    temp_migrated = get_bool some_migrated;
+    match temp_migrated with 
+        | True =>
+          err = CantUseAsUserMigrated;
+          ThrowError err
+        | False =>
+    end
 end
 
 procedure IsVaultProxy(address: ByStr20)
@@ -181,9 +223,44 @@ procedure IsVaultProxy(address: ByStr20)
       err = CallerNotVaultProxy;
       ThrowError err
   end
-    
 end
 
+procedure IsOldVault(address: ByStr20)
+  is_previous = builtin eq address previous_version_address;
+  match is_previous with
+    | True =>
+    | False => 
+      err = CallerNotOldVersion;
+      ThrowError err
+  end
+end
+
+procedure CheckIfMigratableVersionExists()
+  mc <- migrateAbleContract;
+  migratable = builtin eq mc zero_address;
+  match migratable with
+    | False =>
+        err = CannotUseOldVault;
+        ThrowError err
+    | True => 
+  end
+end
+
+procedure IfNotFirstVersionCheckIfMigratedFromPreviousVersion(vaultId: Uint32)
+    is_zero = builtin eq previous_version_address zero_address;
+    match is_zero with
+        | True =>
+        | False =>
+            some_activate_from_previous <- activeMsgFromPreviousVersion[vaultId];
+            activate_from_previous = get_bool some_activate_from_previous;
+            match activate_from_previous with 
+                | True =>
+                | False =>
+                    err = VaultNotMigratedFromPreviousVersion;
+                    ThrowError err
+            end
+    end 
+end
 
 procedure IsNotZero(value: Uint128)
   is_zero = builtin eq value zero_uint128;
@@ -191,6 +268,26 @@ procedure IsNotZero(value: Uint128)
     | False =>
     | True =>
       err = CannotBeZero;
+      ThrowError err
+  end
+end
+
+procedure IsNotZeroAddress(address: ByStr20)
+  is_zero = builtin eq address zero_address;
+  match is_zero with
+    | False =>
+    | True =>
+      err = CannotBeZero;
+      ThrowError err
+  end
+end
+
+procedure IsZeroAddress(address: ByStr20)
+  is_zero = builtin eq address zero_address;
+  match is_zero with
+    | True =>
+    | False =>
+      err = ShouldBeZeroAddress;
       ThrowError err
   end
 end
@@ -587,6 +684,7 @@ transition GetNewVault()
     CheckVaultPrice;
     accept;
     currentTotalVaults <-& storage.total_vaults;
+    CheckIfMigratableVersionExists;
     newVaultId = builtin add currentTotalVaults one_uint32;
     msg_to_storage = {_tag : "OperationGetNewVault"; _recipient : storage; _amount : zero_uint128; 
                       vaultId: newVaultId; initiator: _sender};
@@ -596,10 +694,55 @@ transition GetNewVault()
     event e
 end
 
+procedure MigrateFrom(vaultId: Uint32)
+    migrated[vaultId] := true;
+    e = {_eventname: "MigrateFrom"; vault_id: vaultId };
+    event e
+end
+
+procedure MigrateTo(vaultId: Uint32)
+    activeMsgFromPreviousVersion[vaultId] := true;
+    e = {_eventname: "MigrateTo"; vault_id: vaultId };
+    event e
+end
+
+transition UpdateMigrationContract(migrationContract: ByStr20)
+    temp <- migrateAbleContract;
+    IsZeroAddress temp;
+    IsVaultProxy _sender;
+    migrateAbleContract := migrationContract;
+    e = {_eventname: "MigrationContractAdded" };
+    event e
+end
+
+transition MigrateMessageOldVersion(vaultId: Uint32)
+    IsOldVault _sender;
+    MigrateTo vaultId
+end
+
+transition MigrateToNewVersion(vaultId: Uint32, initiator: ByStr20)
+    VerifyVaultOwner vaultId initiator;
+    ThrowErrorIfUserHasMigrated vaultId;
+    IsVaultProxy _sender;
+    
+    some_collateral <-& storage.collateral_amount[vaultId];
+    collateral = decode_value some_collateral;
+    
+    contractToMigrate <- migrateAbleContract;
+    (* The below statement will ensure no migration is done till admin approves *)
+    IsNotZeroAddress contractToMigrate; 
+    IsNotZero collateral;
+    MigrateFrom vaultId;
+    SafeTransfer collateral_token contractToMigrate collateral
+end
+
 (* Can be directly called. No need to use proxy *)
 transition AddCollateral(vaultId: Uint32, amount: Uint128)
     VerifyVaultOwner vaultId _sender;
+    ThrowErrorIfUserHasMigrated vaultId;
+    IfNotFirstVersionCheckIfMigratedFromPreviousVersion vaultId;
     IsNotZero amount;
+    CheckIfMigratableVersionExists;
     UpdateVaultStorageForMethodAddCollateral vaultId amount;
     SafeTransferFrom collateral_token _sender _this_address amount;
     e = {_eventname: "AddCollateral"; vault_id: vaultId; amount: amount};
@@ -609,8 +752,11 @@ end
 (* Can be only called by proxy *)
 transition MintPillar(vaultId: Uint32, initiator: ByStr20, receiver: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
     VerifyVaultOwner vaultId initiator;
+    ThrowErrorIfUserHasMigrated vaultId;
+    IfNotFirstVersionCheckIfMigratedFromPreviousVersion vaultId;
     IsVaultProxy _sender;
     IsNotZero amount;
+    CheckIfMigratableVersionExists;
     UpdateVaultStorageForMethodMintPillar vaultId receiver amount price decimals;
     e = {_eventname: "MintPillar"; vault_id: vaultId; amount: amount};
     event e
@@ -619,21 +765,30 @@ end
 (* Can only be called by proxy *)
 transition RepayPillar(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32)
     VerifyVaultOwner vaultId initiator;
+    ThrowErrorIfUserHasMigrated vaultId;
+    IfNotFirstVersionCheckIfMigratedFromPreviousVersion vaultId;
     IsVaultProxy _sender;
     IsNotZero amount;
+    CheckIfMigratableVersionExists;
     UpdateVaultStorageMethodForRepay vaultId initiator amount price decimals
 end
 
 (* can only be called by proxy *)
 transition LiquidateVault(vaultId: Uint32, initiator: ByStr20, price: Uint32, decimals: Uint32)
     IsNotVaultOwner vaultId initiator;
+    ThrowErrorIfUserHasMigrated vaultId;
+    IfNotFirstVersionCheckIfMigratedFromPreviousVersion vaultId;
     IsVaultProxy _sender;
+    CheckIfMigratableVersionExists;
     UpdateVaultStorageMethodForLiquidate vaultId initiator price decimals
 end
 
 (* can be only called by proxy *)
 transition ReleaseCollateral(vaultId: Uint32, initiator: ByStr20, amount: Uint128, price: Uint32, decimals: Uint32, receiver: ByStr20)
     VerifyVaultOwner vaultId initiator;
+    ThrowErrorIfUserHasMigrated vaultId;
+    IfNotFirstVersionCheckIfMigratedFromPreviousVersion vaultId;
+    CheckIfMigratableVersionExists;
     IsVaultProxy _sender;
     
     UpdateVaultStorageMethodForReleaseCollateral vaultId initiator amount price decimals receiver;
