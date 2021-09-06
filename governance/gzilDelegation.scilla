@@ -57,7 +57,7 @@ contract GzilDelegation
 )
 
 field delegation: Map ByStr20 ByStr20 = Emp ByStr20 ByStr20
-field delegateeVotes : Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field balances : Map ByStr20 Uint128 = Emp ByStr20 Uint128
 
 field existingUserDelegatedAmount: Map ByStr20 Uint128 = Emp ByStr20 Uint128
 
@@ -112,10 +112,10 @@ procedure IsAdmin(address: ByStr20)
 end
 
 procedure UpdateDelegation(delegator: ByStr20, oldDelegatee: ByStr20, newDelegatee: ByStr20)
-    some_existingVotesOfOldDelegatee <- delegateeVotes[oldDelegatee];
+    some_existingVotesOfOldDelegatee <- balances[oldDelegatee];
     existingVotesOfOldDelegatee = decode_uint128 some_existingVotesOfOldDelegatee;
 
-    some_existingVotesOfNewDelegatee <- delegateeVotes[newDelegatee];
+    some_existingVotesOfNewDelegatee <- balances[newDelegatee];
     existingVotesOfNewDelegatee = decode_uint128 some_existingVotesOfNewDelegatee;
 
     some_existingShareOfDelegator <- existingUserDelegatedAmount[delegator];
@@ -129,14 +129,16 @@ procedure UpdateDelegation(delegator: ByStr20, oldDelegatee: ByStr20, newDelegat
     newExistingShareOfDelegator = builtin sub temp1 temp2;
 
     temp3 = builtin sub existingVotesOfOldDelegatee existingShareOfDelegator;
-    delegateeVotes[oldDelegatee] := temp3;
+    balances[oldDelegatee] := temp3;
 
     temp4 = builtin add existingVotesOfNewDelegatee newExistingShareOfDelegator;
-    delegateeVotes[newDelegatee] := temp4;
+    balances[newDelegatee] := temp4;
 
     existingUserDelegatedAmount[delegator] := newExistingShareOfDelegator;
 
-    e = {_eventname: "UpdateVotes"; delegatorShares: newExistingShareOfDelegator; oldDelegateeVotes:  temp3; newDelegateeVotes: temp4 };
+    e = {_eventname: "UpdateVotes"; delegatorShares: newExistingShareOfDelegator; oldDelegateeVotes:  temp3; newDelegateeVotes: temp4;
+            delegator: delegator; oldDelegatee: oldDelegatee; newDelegatee: newDelegatee
+        };
     event e
 end
 

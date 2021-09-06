@@ -309,6 +309,13 @@ transition ChangeUnlockWaitsBlocks(new_wait_blocks: Uint128)
     event e
 end
 
+transition changeDelegationContract(dc: ByStr20)
+    IsAdmin _sender;
+    delegationContract := dc;
+    e = {_eventname : "ChangeDelegationContract"; new_delegation : dc};
+    event e
+end
+
 transition RequestAdminTransfer (new_admin : ByStr20)
   IsAdmin _sender;
   IsNotSender new_admin;
@@ -391,7 +398,7 @@ transition lockTokens(amount: Uint128)
                                         address: _sender };
           
           msgs = one_msg msg_to_delegation_contract;
-          (* send msgs; *)
+          send msgs;
           e = {_eventname: "LockedTokens"; totalShares: newTotalShares; totalGzilLocked: newTotalGZil;
                 userTotalShares: newUserShares; amount: amount; user: _sender; sharesObtained: newShares
             };
@@ -403,11 +410,12 @@ procedure CheckWithdrawAbleShares(address: ByStr20, shares: Uint128)
     someUserShares <- userShares[address];
     someUserSharesInRequest <- userSharesPendingToBeWithdrawn[address];
     withdrawableShares = option_sub someUserShares someUserSharesInRequest;
+    
 
-    is_zero = builtin eq withdrawableShares zero_uint128;
+    is_zero = builtin lt shares withdrawableShares;
     match is_zero with 
-    | False => 
-    | True =>
+    | True => 
+    | False =>
         err = DoesNotHaveWithdrawableShares;
         ThrowError err
     end

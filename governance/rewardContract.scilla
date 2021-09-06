@@ -60,6 +60,7 @@ field rewardClaimedPerEpoch: Map Uint32 (Map ByStr20 Uint128) = Emp Uint32 (Map 
 field collateralForEpoch: Map Uint32 ByStr20 = Emp Uint32 ByStr20
 
 field gzilStakingContract: ByStr20 = zero_address
+field balances : Map ByStr20 Uint128 = Emp ByStr20 Uint128
 
 procedure ThrowError(err : Error)
   e = make_error err;
@@ -135,7 +136,9 @@ end
 procedure noteReward(reward: Reward)
   match reward with
     | Reward epoch address amount =>
-      rewardPerEpoch[epoch][address] := amount
+      rewardPerEpoch[epoch][address] := amount;
+      e = {_eventname: "RecordReward"; epoch: epoch; address: address; amount: amount};
+      event e
   end
 end
 
@@ -149,12 +152,22 @@ transition EditReward(reward: Reward)
   noteReward reward
 end
 
-procedure SafeTransferFrom(tokenContract: ByStr20, from: ByStr20, to: ByStr20, amount: Uint128)
-    msg_to_token_contract = {_tag: "TransferFrom"; _recipient: tokenContract; _amount: zero_uint128;
-                                    from: from; to: to; amount: amount
-                                };
+procedure SafeTransfer(tokenContract: ByStr20, to: ByStr20, amount: Uint128)
+    msg_to_token_contract = {_tag: "Transfer"; _recipient: tokenContract; _amount: zero_uint128;
+                                    to: to; amount: amount
+                            };
     msgs = one_msg msg_to_token_contract;
     send msgs
+end
+
+transition setRewardTokenForEpoch(epoch: Uint32, collateral: ByStr20)
+  collateralForEpoch[epoch] := collateral;
+  e = {_eventname: "RewardTokenForEpoch"; epoch: epoch; collateralToken: collateral};
+  event e
+end
+
+transition setGzilStakingContract(stakingContract: ByStr20)
+  gzilStakingContract := stakingContract
 end
 
 transition claimReward(epoch: Uint32)
@@ -177,6 +190,27 @@ transition claimReward(epoch: Uint32)
   totalRewardClaimed = builtin add rewardClaimed rewardToWithdraw;
   rewardPerEpoch[epoch][_sender] := totalRewardClaimed;
   
-  SafeTransferFrom collateralToken spender _sender  rewardToWithdraw
+  SafeTransfer collateralToken _sender  rewardToWithdraw;
+  e = {_eventname: "ClaimReward"; epoch: epoch; address: _sender; amount: totalRewardClaimed};
+  event e
+end
 
+transition RecipientAcceptTransferFrom(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+(*  to be complete*)
+end
+
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+(*  to be complete*)
+end
+
+transition RecipientAcceptTransfer(sender : ByStr20, recipient : ByStr20, amount : Uint128)
+  some_existingBalance <- balances[_sender];
+  existingBalance = decode_uint128 some_existingBalance;
+
+  newBalance = builtin add existingBalance amount;
+  balances[_sender] := newBalance
+end
+
+transition TransferSuccessCallBack(sender : ByStr20, recipient : ByStr20, amount : Uint128)
+  (*  to be complete*)
 end
